@@ -4,7 +4,7 @@ import os
 
 
 def get_gpus():
-    value = os.getenv('CUDA_VISIBLE_DEVICES', '1,2')  # 获取可使用的gpu，默认值为0
+    value = os.getenv('CUDA_VISIBLE_DEVICES', '0')  # 获取可使用的gpu，默认值为0
     value = value.split(",")  # 根据,号划分成数组
     return len(value)
 
@@ -117,7 +117,7 @@ class Tensors:
                     scpoe.reuse_variables()
 
         # 汇总
-        with tf.device("/gpu:1"):  # 指定运行0号gpu, 在0号gpu上计算loss
+        with tf.device("/gpu:0"):  # 指定运行0号gpu, 在0号gpu上计算loss
             with tf.variable_scope("{name}_train".format(name=config.get_name())):  # 汇总张量的命名
                 # 计算loss均值
                 losses = [ts.losses for ts in self.sub_ts]  # 获取所有gpu上的loss张量, [gpus, losses]
