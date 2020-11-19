@@ -6,7 +6,7 @@ import numpy as np
 class DS:
     def __init__(self):
         self.train_path = "simples/data/train"
-        self.test_path = "simples/data/test"
+        self.test_path = "simples/data/vali"
         images = []
         for filename in os.listdir(self.train_path):
             img = cv2.imread(os.path.join(self.train_path, filename))
@@ -33,7 +33,9 @@ class DS:
 
     def test_ds(self):
         images = []
-        for filename in os.listdir(self.test_path):
+        file_name_list = os.listdir(self.test_path)
+        file_name_list.sort()
+        for filename in file_name_list:
             img = cv2.imread(os.path.join(self.test_path, filename))
             imgs = []
             for i in range(8):

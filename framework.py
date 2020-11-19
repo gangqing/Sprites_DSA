@@ -61,7 +61,7 @@ class Config:
             else:
                 parser.add_argument("--{attr}".format(attr=attr), type=type(value), default=value, help="default to %s" % value)
 
-        parser.add_argument("--call", type=str, default="data", help="call method, by default call data()")
+        parser.add_argument("--call", type=str, default="train", help="call method, by default call data()")
         arg = parser.parse_args()
         for attr in attrs:
             if hasattr(arg, attr):
@@ -230,14 +230,14 @@ class App:
                 self.before_batch(epoch, batch)
                 feed_dict = self.get_feed_dict(ds_train)
                 if len(self.ts.train_ops) == 1:
-                    _, summary = self.session.run([self.ts.train_ops[0], self.ts.summary], feed_dict)
+                    _, summary, loss = self.session.run([self.ts.train_ops[0], self.ts.summary, self.ts.losses], feed_dict)
                 else:
                     for train_op in self.ts.train_ops:
                         self.session.run(train_op, feed_dict)
-                    summary = self.session.run(self.ts.summary, feed_dict)
+                    summary, loss = self.session.run([self.ts.summary, self.ts.losses], feed_dict)
 
                 writer.add_summary(summary, global_step=epoch * batches + batch)
-                print("epoch = {epoch} , batch = {batch} , loss = {summary}".format(epoch=epoch, batch=batch, summary=summary))
+                print("epoch = {epoch} , batch = {batch} , loss = {loss}".format(epoch=epoch, batch=batch, loss=loss))
                 self.after_batch(epoch, batch)
             # precise = session.run(self.ts.precise_summary, self.get_feed_dict(ds_validation))
             # writer.add_summary(precise, global_step = epoch)

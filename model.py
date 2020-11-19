@@ -4,22 +4,20 @@ import numpy as np
 import cv2
 from DS import DS
 
-""""
-重构github上的代码
-"""
-
 
 class MyTensors(fm.Tensors):
     def compute_grads(self, opt):
         vars = tf.trainable_variables()
-        vars_disc = [var for var in vars if "simple_z" not in var.name]
-        vars_gene = [var for var in vars if "simple_z" in var.name]
-        vars = [vars_disc, vars_gene]
+        vars_mes = [var for var in vars if "simple_z" not in var.name]
+        # vars_f = [var for var in vars if "encode_f" in var.name or "encode_frame" in var.name]
+        vars_simple_z = [var for var in vars if "simple_z" in var.name]
+        vars = [vars_mes, vars_simple_z, vars_mes]
 
         grads = []
         for gpu_id, ts in enumerate(self.sub_ts):
             with tf.device('/gpu:%d' % gpu_id):
                 grads.append([opt.compute_gradients(loss, vs) for vs, loss in zip(vars, ts.losses)])
+                # grads.append([opt.compute_gradients(ts.losses[0], vars)])
         return [self.get_grads_mean(grads, i) for i in range(len(grads[0]))]
 
 
@@ -30,20 +28,20 @@ class Config(fm.Config):
         self.input_size = 64
         self.x_size = 2048
         self.f_size = 256
-        self.z_size = 32
+        self.z_size = 4
         self.hidden_size = 512
         self.factorised = False  # True : factorised q, False : full q
         self.lr = 0.0001
         self.epoches = 500
         self.batch_size = 10
         self.new_model = False
-        self.simple_path = "images/dsa_for_github/test_"
+        self.simple_path = "images/{name}/test_".format(name=self.get_name())
         self.simple_num = 1
         self.ds = None
         self.training = True
 
     def get_name(self):
-        return "dsa_for_github"
+        return "test08"
 
     def get_sub_tensors(self, gpu_index):
         return SubTensors(self)
@@ -67,6 +65,7 @@ class Config(fm.Config):
         return MyTensors(self)
 
     def test(self):
+        self.training = False
         self.batch_size = 1
         super(Config, self).test()
 
@@ -80,7 +79,8 @@ class SubTensors:
         x = tf.reshape(self.x, [-1, config.input_size, config.input_size, 3])  # [-1 * 8, 64, 64, 3]
         x = self.encode_frame(x, "encode_frame")  # [-1, 8, 2048]
 
-        self.mean_f, self.logvar_f, self.f = self.encode_f(x, "encode_f")  # [-1, 256]
+        self.mean_f, self.logvar_f = self.encode_f(x, "encode_f")  # [-1, 256]
+        self.f = self.reparameterize(self.mean_f, self.logvar_f, self.config.training)
         f = tf.reshape(self.f, [-1, 1, config.f_size])
         f = tf.tile(f, [1, config.frame, 1])  # [-1, 8, 256]
 
@@ -91,22 +91,26 @@ class SubTensors:
         y = self.decode_frame(zf, "decode_frame")  # [-1, 64, 64, 3]
 
         self.predict_y = tf.reshape(y, [-1, config.frame, config.input_size, config.input_size, 3])  # [-1, 8, 64, 64, 3]
+        self.loss()
 
+    def loss(self):
         self.generator_z_mean, self.generator_z_logvar = self.simple_z(config.batch_size, name="simple_z")
 
         # [-1, 8, 64, 64, 3]
         mes = tf.reduce_mean(tf.reduce_sum(tf.square(self.x - self.predict_y), axis=(1, 2, 3, 4)))
         # f : [-1, 256]
-        kld_f = tf.reduce_mean(-0.5 * tf.reduce_sum(1 + self.logvar_f - tf.pow(self.mean_f, 2) - tf.exp(self.logvar_f), 1))
-        # z : [-1, 8, 32]
+        kld_f = tf.reduce_mean(
+            -0.5 * tf.reduce_sum(1 + self.logvar_f - tf.pow(self.mean_f, 2) - tf.exp(self.logvar_f), 1))
         z_post_var = tf.exp(self.logvar_z)
         z_prior_var = tf.exp(self.generator_z_logvar)
-        # kld_z = tf.reduce_mean(0.5 * tf.reduce_sum(self.generator_z_logvar - self.logvar_z +
-        #                              (z_post_var + tf.pow(self.mean_z - self.generator_z_mean, 2)) / z_prior_var - 1, axis=(1, 2)))
-        kld_z = tf.reduce_mean(0.5 * tf.reduce_sum(self.logvar_z - self.generator_z_logvar +
-                                                   (z_prior_var + tf.pow(self.mean_z - self.generator_z_mean, 2)) / z_post_var - 1, axis=(1, 2)))
+        kld_z = tf.reduce_mean(0.5 * tf.reduce_sum(self.generator_z_logvar - self.logvar_z +
+                                                   (z_post_var + tf.pow(self.mean_z - self.generator_z_mean,
+                                                                        2)) / z_prior_var - 1, axis=(1, 2)))
+        # kld_z = tf.reduce_mean(0.5 * tf.reduce_sum(self.logvar_z - self.generator_z_logvar +
+        #                                            (z_prior_var + tf.pow(self.mean_z - self.generator_z_mean,
+        #                                                                 2)) / z_post_var - 1, axis=(1, 2)))
         loss = mes + kld_f
-        self.losses = [loss, 0.01 * kld_z]
+        self.losses = [loss, kld_z, loss]
 
     def encode_frame(self, x, name):
         """
@@ -123,7 +127,8 @@ class SubTensors:
 
             for i in range(3):
                 base_filter *= 2
-                x = tf.layers.conv2d(x, base_filter, 3, 2, padding="same", name="conv_2_{i}".format(i=i))  # [-1, 32, 32, 256]
+                x = tf.layers.conv2d(x, base_filter, 3, 2, padding="same",
+                                     name="conv_2_{i}".format(i=i))  # [-1, 32, 32, 256]
                 x = tf.layers.batch_normalization(x, training=self.config.training, name="bn_1_{i}".format(i=i))
                 x = tf.nn.relu(x, name="relu_1_{i}".format(i=i))
 
@@ -161,7 +166,7 @@ class SubTensors:
             y = tf.concat((y_l2r, y_r2l), axis=1)  # [-1, 1024]
             mean_f = tf.layers.dense(y, self.config.f_size, name="dense_mean")  # [-1, 256]
             logvar_f = tf.layers.dense(y, self.config.f_size, name="dense_logvar")  # [-1, 256]
-        return mean_f, logvar_f, self.reparameterize(mean_f, logvar_f, self.config.training)
+        return mean_f, logvar_f
 
     def reparameterize(self, mean, logvar, random_sampling=True):
         if random_sampling is True:
@@ -180,32 +185,28 @@ class SubTensors:
         """
         with tf.variable_scope(name):
             if self.config.factorised is True:
-                features = tf.layers.dense(x, self.config.hidden_size, activation=tf.nn.relu, name="dense_1")  # [-1, 8, 512]
+                features = tf.layers.dense(x, self.config.hidden_size, activation=tf.nn.relu,
+                                           name="dense_1")  # [-1, 8, 512]
             else:
-                x = tf.concat((x, f), axis=2)  # [-1, 8, 2048 + 256]
-                x = tf.layers.dense(x, self.config.hidden_size, name="dense_2")  # [-1, 8, 512]
+                xf = tf.concat((x, f), axis=2)  # [-1, 8, 2048 + 256]
+                xf = tf.layers.dense(xf, self.config.hidden_size, name="dense_2")  # [-1, 8, 512]
 
                 cell_l2r = tf.nn.rnn_cell.LSTMCell(self.config.f_size, name="cell_l2r", state_is_tuple=False)
                 cell_r2l = tf.nn.rnn_cell.LSTMCell(self.config.f_size, name="cell_r2l", state_is_tuple=False)
-                cell_rnn = tf.nn.rnn_cell.LSTMCell(self.config.f_size, name="cell_rnn", state_is_tuple=False)
-                batch_size = tf.shape(x)[0]
-                state_l2r = cell_l2r.zero_state(batch_size, dtype=x.dtype)
-                state_r2l = cell_r2l.zero_state(batch_size, dtype=x.dtype)
-                state_rnn = cell_rnn.zero_state(batch_size, dtype=x.dtype)
+                batch_size = tf.shape(xf)[0]
+                state_l2r = cell_l2r.zero_state(batch_size, dtype=xf.dtype)
+                state_r2l = cell_r2l.zero_state(batch_size, dtype=xf.dtype)
                 y_l2r = []
                 y_r2l = []  # [8, -1, 512]
                 for i in range(self.config.frame):
-                    yi_l2r, state_l2r = cell_l2r(x[:, i, :], state_l2r)  # y_l2r : [-1, 512]
-                    yi_r2l, state_r2l = cell_r2l(x[:, self.config.frame - i - 1, :], state_r2l)  # y_r2l : [-1, 512]
+                    yi_l2r, state_l2r = cell_l2r(xf[:, i, :], state_l2r)  # y_l2r : [-1, 512]
+                    yi_r2l, state_r2l = cell_r2l(xf[:, self.config.frame - i - 1, :], state_r2l)  # y_r2l : [-1, 512]
                     y_l2r.append(yi_l2r)
                     y_r2l.insert(0, yi_r2l)
                 y_lstm = [yi_l2r + yi_r2l for yi_l2r, yi_r2l in zip(y_l2r, y_r2l)]  # [8, -1, 512]
                 y_lstm = tf.transpose(y_lstm, [1, 0, 2])  # [-1, 8, 512]
-                y_rnn = []
-                for i in range(self.config.frame):
-                    yi_rnn, state_rnn = cell_rnn(y_lstm[:, i, :], state_rnn)  # [-1, 512]
-                    y_rnn.append(yi_rnn)
-                features = tf.transpose(y_rnn, [1, 0, 2])
+                rnn_cell = tf.nn.rnn_cell.BasicRNNCell(self.config.f_size * 2)
+                features, states = tf.nn.dynamic_rnn(rnn_cell, y_lstm, dtype=tf.float32)  # [-1, 8, 512]
             mean_z = tf.layers.dense(features, self.config.z_size, name="dense_mean")  # [-1, 8, 32]
             logvar_z = tf.layers.dense(features, self.config.z_size, name="dense_logvar")  # [-1, 8, 32]
         return mean_z, logvar_z
@@ -214,29 +215,25 @@ class SubTensors:
         """
         :return: [-1, 8, 32]
         """
-        # z_out = None
         z_mean = None
         z_logvar = None
         num_units = self.config.z_size
         with tf.variable_scope(name) as scope:
             cell = tf.nn.rnn_cell.LSTMCell(num_units, name="cell", state_is_tuple=False)
             state = cell.zero_state(batch_size, dtype=self.z.dtype)
-            x_t = tf.zeros([batch_size, num_units], dtype=self.z.dtype)
+            z_t = tf.zeros([batch_size, num_units], dtype=self.z.dtype)
             for i in range(self.config.frame):
-                h_t, state = cell(x_t, state)  # [-1, 32]
+                h_t, state = cell(z_t, state)  # [-1, 32]
                 mean_z = tf.layers.dense(h_t, num_units, name="mean_z")
                 logvar_z = tf.layers.dense(h_t, num_units, name="logvar_z")
-                # z_t = self.reparameterize(mean_z, logvar_z)
+                z_t = self.reparameterize(mean_z, logvar_z, self.config.training)
                 if z_mean is None:
                     z_mean = tf.reshape(mean_z, [-1, 1, num_units])
                     z_logvar = tf.reshape(logvar_z, [-1, 1, num_units])
-                    # z_out = tf.reshape(z_t, [-1, 1, num_units])
                 else:
                     z_mean = tf.concat((z_mean, tf.reshape(mean_z, [-1, 1, num_units])), axis=1)
                     z_logvar = tf.concat((z_logvar, tf.reshape(logvar_z, [-1, 1, num_units])), axis=1)
-                    # z_out = tf.concat((z_out, tf.reshape(z_t, [-1, 1, num_units])), axis=1)
                 scope.reuse_variables()
-
         return z_mean, z_logvar
 
     def decode_frame(self, zf, name):
@@ -249,20 +246,24 @@ class SubTensors:
             # base_filter = self.config.x_size // 8  # 256
             base_filter = 256
             y = tf.layers.dense(zf, self.config.x_size * 2, activation=tf.nn.relu, name="dense_1")  # [-1, 8, 4096]
-            y = tf.layers.dense(y, base_filter * final_size * final_size, activation=tf.nn.relu, name="dense_2")  # [-1, 8, 8 * 8 * 256]
+            y = tf.layers.dense(y, base_filter * final_size * final_size, activation=tf.nn.relu,
+                                name="dense_2")  # [-1, 8, 8 * 8 * 256]
 
             y = tf.reshape(y, [-1, base_filter * final_size * final_size])  # [-1, 8 * 8 * 256]
             y = tf.reshape(y, [-1, final_size, final_size, base_filter])  # [-1, 8, 8, 256]
 
             for i in range(3):
                 base_filter //= 2
-                y = tf.layers.conv2d_transpose(y, base_filter, 3, 2, padding="same", name="conv_1_{i}".format(i=i))  # [-1, 64, 64, 32]
+                y = tf.layers.conv2d_transpose(y, base_filter, 3, 2, padding="same",
+                                               name="conv_1_{i}".format(i=i))  # [-1, 64, 64, 32]
                 y = tf.layers.batch_normalization(y, training=self.config.training, name="bn_1_{i}".format(i=i))
-                y = tf.nn.relu(y, name="relu_1_{i}".format(i=i))
+                if i == 2:
+                    y = tf.nn.sigmoid(y, name="sigmoid")
+                else:
+                    y = tf.nn.relu(y, name="relu_1_{i}".format(i=i))
 
             y = tf.layers.conv2d_transpose(y, 3, 3, 1, padding="same", name="conv_2")  # [-1, 64, 64, 3]
             y = tf.layers.batch_normalization(y, training=self.config.training, name="bn_2".format(i=i))
-            y = tf.nn.relu(y, name="sigmoid_2")
         return y
 
 
@@ -270,7 +271,7 @@ class App(fm.App):
 
     def test(self, ds_test):
         x1 = ds_test[0]
-        x2 = ds_test[10]
+        x2 = ds_test[-1]
 
         self.reconstruction(x1)
         self.reconstruction_with_random_f(x1)
@@ -302,9 +303,8 @@ class App(fm.App):
         ts = self.ts.sub_ts[-1]
 
         z = self.session.run(ts.z, {ts.x: [x]})
-        # mean = np.random.uniform(0, 1, size=[len(x), self.config.f_size])
-        f = np.random.normal(0, 1, size=[1, self.config.f_size])  # [-1, 256]
-        images_pre = self.session.run(ts.predict_y, {ts.f: f, ts.z: z})  # [-1, 8, 64, 64, 3]
+        simple_f = np.random.normal(0, 1, size=[1, self.config.f_size])  # [-1, 256]
+        images_pre = self.session.run(ts.predict_y, {ts.f: simple_f, ts.z: z})  # [-1, 8, 64, 64, 3]
 
         image_x = np.array(x)  # [8, 64, 64,3]
         image_x = np.reshape(image_x, [1, 8, 64, 64, 3])
@@ -321,8 +321,8 @@ class App(fm.App):
         """""
         ts = self.ts.sub_ts[-1]
         f, z_mean, z_logvar = self.session.run([ts.f, ts.generator_z_mean, ts.generator_z_logvar], {ts.x: [x]})
-        z = self.reparameterize(z_mean, z_logvar)
-        images_pre = self.session.run(ts.predict_y, {ts.f: f, ts.z: z})  # [-1, 8, 64, 64, 3]
+        simple_z = self.reparameterize(z_mean, z_logvar)
+        images_pre = self.session.run(ts.predict_y, {ts.f: f, ts.z: simple_z})  # [-1, 8, 64, 64, 3]
         image_x = np.array(x)  # [8, 64, 64,3]
         image_x = np.reshape(image_x, [1, 8, 64, 64, 3])
 
@@ -364,9 +364,9 @@ class App(fm.App):
 
         f = np.random.normal(0, 1, size=[1, self.config.f_size])  # [-1, 256]
         mean_z, logvar_z = self.session.run([ts.generator_z_mean, ts.generator_z_logvar])  # [-1, 8, 32]
-        z = self.reparameterize(mean_z, logvar_z)  # [-1, 8, 32]
+        simple_z = self.reparameterize(mean_z, logvar_z)  # [-1, 8, 32]
 
-        images = self.session.run(ts.predict_y, {ts.f: f, ts.z: z})  # [-1, 8, 64, 64, 3]
+        images = self.session.run(ts.predict_y, {ts.f: f, ts.z: simple_z})  # [-1, 8, 64, 64, 3]
         images = np.transpose(images, [0, 2, 1, 3, 4])  # [-1, 64, 8, 64, 3]
         images = np.reshape(images, [-1, 64 * 8, 3])
 
@@ -374,11 +374,10 @@ class App(fm.App):
 
     def reparameterize(self, mean, logvar):
         std = np.exp(0.5 * logvar)
-        eps = np.random.normal(size=logvar.shape)
+        eps = np.random.normal(size=mean.shape)
         return mean + std * eps
 
 
 if __name__ == '__main__':
-    tf.disable_eager_execution()
     config = Config()
-    config.call("train")
+    config.from_cmd()
