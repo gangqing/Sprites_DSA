@@ -11,6 +11,8 @@ def read_file(file_path, is_sort=False):
     for filename in file_name_list:
         img = cv2.imread(os.path.join(file_path, filename))
         imgs = []
+        if img is None:
+            continue
         for i in range(8):
             sub_img = img[:, i * 64: i * 64 + 64, :]
             imgs.append(sub_img)
@@ -20,8 +22,8 @@ def read_file(file_path, is_sort=False):
 
 class DS:
     def __init__(self):
-        self.train_path = "simples/data/train"
-        self.test_path = "simples/data/vali"
+        self.train_path = "simples/train"
+        self.test_path = "simples/vali"
 
         self.ds = read_file(self.train_path)
         self.test_ds = read_file(self.test_path)

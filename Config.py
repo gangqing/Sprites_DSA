@@ -11,12 +11,12 @@ class Config(fm.Config):
         self.input_size = 64
         self.x_size = 2048
         self.f_size = 256
-        self.z_size = 6
+        self.z_size = 20
         self.hidden_size = 512
         self.factorised = False  # True : factorised q, False : full q
         self.lr = 0.0001
-        self.epoches = 800
-        self.batch_size = 10
+        self.epoches = 500
+        self.batch_size = 16
         self.new_model = False
         self.simple_path = "images/{name}/test_".format(name=self.get_name())
         self.simple_num = 1
@@ -24,7 +24,7 @@ class Config(fm.Config):
         self.training = True
 
     def get_name(self):
-        return "test13"
+        return "test15"
 
     def get_sub_tensors(self, gpu_index):
         return Models.SubTensor(self)

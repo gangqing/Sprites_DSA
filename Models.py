@@ -82,9 +82,6 @@ class SubTensor:
         kld_z = tf.reduce_mean(0.5 * tf.reduce_sum(self.generator_z_logvar - self.logvar_z +
                                                    (z_post_var + tf.pow(self.mean_z - self.generator_z_mean,
                                                                         2)) / z_prior_var - 1, axis=(1, 2)))
-        # kld_z = tf.reduce_mean(0.5 * tf.reduce_sum(self.logvar_z - self.generator_z_logvar +
-        #                                            (z_prior_var + tf.pow(self.mean_z - self.generator_z_mean,
-        #                                                                 2)) / z_post_var - 1, axis=(1, 2)))
         loss = mes + kld_f
         self.losses = [loss, kld_z, loss]
 

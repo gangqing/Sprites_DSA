@@ -14,6 +14,25 @@ class App(fm.App):
         self.reconstruction_with_random_f(x1)
         self.reconstruction_with_random_z(x1)
         self.random()
+        self.z(x1)
+
+    def z(self, x):
+        """
+        重组：f + 随机z，生成图片结构 [x, x_re]
+        """""
+        ts = self.ts.sub_ts[-1]
+        f = self.session.run(ts.f, {ts.x: [x]})
+
+        simple_z = np.zeros(shape=[1, 8, self.config.z_size])
+        images_pre = self.session.run(ts.predict_y, {ts.f: f, ts.z: simple_z})  # [-1, 8, 64, 64, 3]
+        image_x = np.array(x)  # [8, 64, 64,3]
+        image_x = np.reshape(image_x, [1, 8, 64, 64, 3])
+
+        images = (image_x, images_pre)
+        images = np.reshape(images, [-1, 8, 64, 64, 3])
+        images = np.transpose(images, [0, 2, 1, 3, 4])  # [-1, 64, 8, 64, 3]
+        images = np.reshape(images, [-1, 64 * 8, 3])
+        cv2.imwrite(self.config.simple_path + "z_zero.jpg", images * 255)
 
     def reconstruction(self, x):
         """
