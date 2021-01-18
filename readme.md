@@ -19,8 +19,13 @@
 
 #### 效果
 还原效果：第一行是输入图，第二行是输出图；
-![avatar](image/test_re.jpg)
+
+![image](https://github.com/gangqing/Disentangled_Sequential_Autoencoder/blob/master/image/test_re.jpg)
+
 随机生成静态：第一行是输入图，第二行是输出图；
+
 ![avatar](image/test_re_fre.jpg)
+
 特征交换：第一、二行是输入图x1、x2，第三行是x1的静态和x2的动态结合，第四行是x1的动态和x2的静态结合。
+
 ![avatar](image/test_feature_change.jpg)
